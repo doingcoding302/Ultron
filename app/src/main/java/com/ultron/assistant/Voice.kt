@@ -20,12 +20,15 @@ object Voice {
     private var player: MediaPlayer? = null
     private val bg = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+    @Volatile var lastError = ""
 
     fun speak(ctx: Context, text: String, done: () -> Unit = {}) {
         val app = ctx.applicationContext
         bg.execute {
-            val fk = Cfg.get(app, "fish")
+            val fk = Cfg.get(app, "fish").trim()
+            lastError = ""
             if (fk.isNotBlank() && fish(app, text, fk)) { done(); return@execute }
+            if (fk.isBlank()) lastError = "No Fish Audio key, using system voice"
             main.post { local(app, text, done) }
         }
     }
@@ -35,31 +38,39 @@ object Voice {
         try { tts?.stop() } catch (_: Exception) {}
     }
 
-    // Fish Audio TTS using the Ultron voice model id
-    private fun fish(app: Context, text: String, key: String): Boolean = try {
-        val c = URL("https://api.fish.audio/v1/tts").openConnection() as HttpURLConnection
-        c.requestMethod = "POST"
-        c.setRequestProperty("Authorization", "Bearer $key")
-        c.setRequestProperty("Content-Type", "application/json")
-        c.doOutput = true
-        val body = JSONObject().put("text", text)
-            .put("reference_id", Cfg.get(app, "voice")).put("format", "mp3")
-        c.outputStream.use { it.write(body.toString().toByteArray()) }
-        if (c.responseCode >= 400) false else {
-            val f = File(app.cacheDir, "u.mp3")
-            c.inputStream.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
-            val latch = CountDownLatch(1)
-            val mp = MediaPlayer()
-            player = mp
-            mp.setDataSource(f.absolutePath)
-            mp.setOnCompletionListener { latch.countDown() }
-            mp.setOnErrorListener { _, _, _ -> latch.countDown(); true }
-            mp.prepare(); mp.start()
-            latch.await(90, TimeUnit.SECONDS)
-            mp.release(); player = null
-            true
+    // Fish Audio TTS with the Ultron voice model id
+    private fun fish(app: Context, text: String, key: String): Boolean {
+        for (m in listOf<String?>("s1", null)) {
+            try {
+                val c = URL("https://api.fish.audio/v1/tts").openConnection() as HttpURLConnection
+                c.requestMethod = "POST"
+                c.setRequestProperty("Authorization", "Bearer $key")
+                c.setRequestProperty("Content-Type", "application/json")
+                if (m != null) c.setRequestProperty("model", m)
+                c.connectTimeout = 15000; c.readTimeout = 60000
+                c.doOutput = true
+                val body = JSONObject().put("text", text)
+                    .put("reference_id", Cfg.get(app, "voice").trim()).put("format", "mp3")
+                c.outputStream.use { it.write(body.toString().toByteArray()) }
+                val code = c.responseCode
+                if (code >= 400) { lastError = "Fish voice error $code"; continue }
+                val f = File(app.cacheDir, "u.mp3")
+                c.inputStream.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                val latch = CountDownLatch(1)
+                val mp = MediaPlayer()
+                player = mp
+                mp.setDataSource(f.absolutePath)
+                mp.setOnCompletionListener { latch.countDown() }
+                mp.setOnErrorListener { _, _, _ -> latch.countDown(); true }
+                mp.prepare(); mp.start()
+                latch.await(90, TimeUnit.SECONDS)
+                mp.release(); player = null
+                lastError = ""
+                return true
+            } catch (e: Exception) { lastError = "Fish voice failed: ${e.message}" }
         }
-    } catch (e: Exception) { false }
+        return false
+    }
 
     // Fallback: deep, slow system voice
     private fun local(app: Context, text: String, done: () -> Unit) {
@@ -75,7 +86,7 @@ object Voice {
             t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
         }
         if (ready) go() else tts = TextToSpeech(app) { s ->
-            if (s == TextToSpeech.SUCCESS) { ready = true; go() } else done()
+            if (s == TextToSpeech.SUCCESS) { ready = true; go() } else { lastError += " | no system voice engine"; done() }
         }
     }
 }

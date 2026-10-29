@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,6 +29,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -33,7 +37,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,6 +52,11 @@ import kotlin.math.sin
 val Red = Color(0xFFFF2030)
 val Dim = Color(0xFF9AA0B0)
 val TAU = 6.2831855f
+private const val HEAD_AR = 0.833f
+private const val ELX = 0.283f
+private const val ELY = 0.503f
+private const val ERX = 0.669f
+private const val ERY = 0.521f
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(b: Bundle?) {
@@ -94,13 +105,12 @@ fun UltronApp() {
         else { Voice.stop(); status = "listening"; line = "LISTENING…"; ears.start() }
     }
 
-    // ---- animation drivers ----
     val inf = rememberInfiniteTransition(label = "t")
     val t by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(12000, easing = LinearEasing)), label = "t")
     val intro = remember { Animatable(0f) }
     LaunchedEffect(Unit) { intro.animateTo(1f, tween(1800, easing = FastOutSlowInEasing)) }
     val energy by animateFloatAsState(
-        when (status) { "listening" -> 1f; "processing" -> 0.9f; "responding" -> 0.75f; else -> 0.35f },
+        when (status) { "listening" -> 1f; "processing" -> 0.9f; "responding" -> 0.75f; else -> 0.3f },
         tween(600), label = "energy"
     )
     var shown by remember { mutableStateOf("") }
@@ -108,103 +118,83 @@ fun UltronApp() {
         shown = ""
         for (c in line.uppercase()) { shown += c; delay(if (line.length > 80) 6L else 20L) }
     }
-    val statusWord = when (status) { "listening" -> "LISTENING"; "processing" -> "THINKING"; "responding" -> "SPEAKING"; else -> "STANDBY" }
+    val sub = when (status) { "listening" -> " · LISTENING"; "processing" -> " · THINKING"; "responding" -> " · SPEAKING"; else -> "" }
 
     Box(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
-
-        // drifting glow + rising ember particles
         Canvas(Modifier.fillMaxSize()) {
-            val gx = size.width * (0.5f + 0.18f * sin(t * TAU))
-            val gy = size.height * (0.38f + 0.05f * cos(t * TAU))
             drawRect(Brush.radialGradient(
-                listOf(Red.copy(alpha = 0.14f + 0.10f * energy), Color.Transparent),
-                center = Offset(gx, gy), radius = size.width * 1.1f))
-            for (i in 0 until 30) {
-                val seed = (i * 0.618f) % 1f
-                val x = size.width * ((i * 0.37f + 0.11f) % 1f)
-                val y = size.height * (1f - ((seed + t * (1 + i % 3)) % 1f))
-                val tw = 0.5f + 0.5f * sin(t * TAU * (2 + i % 4) + i)
-                drawCircle(Red.copy(alpha = (0.08f + 0.30f * tw).coerceIn(0f, 1f)), 1.5f + (i % 3), Offset(x, y))
-            }
+                listOf(Red.copy(alpha = 0.10f + 0.10f * energy), Color.Transparent),
+                center = Offset(size.width / 2, size.height * 0.38f), radius = size.width * 0.95f))
         }
 
-        // header
-        Row(Modifier.fillMaxWidth().padding(24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).graphicsLayer { alpha = 0.55f + 0.45f * sin(t * TAU * 6) }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp, vertical = 28.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).graphicsLayer { alpha = 0.6f + 0.4f * sin(t * TAU * 6) }
                 .clip(CircleShape).background(Red))
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(18.dp))
             Column(Modifier.weight(1f)) {
-                Text("U.L.T.R.O.N.", color = Color(0xFFE6E8F0), fontSize = 20.sp, letterSpacing = 6.sp)
-                Text("AI ASSISTANT · $statusWord", color = Dim, fontSize = 11.sp, letterSpacing = 3.sp)
+                Text("U.L.T.R.O.N.", color = Color(0xFFE6E8F0), fontSize = 19.sp, letterSpacing = 7.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("AI ASSISTANT$sub", color = Dim, fontSize = 11.sp, letterSpacing = 3.sp)
             }
             Text("⚙", color = Dim, fontSize = 26.sp, modifier = Modifier.clickable { settings = true })
         }
 
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(80.dp))
+            Spacer(Modifier.height(84.dp))
 
-            // reactor rings + face
-            Box(Modifier.size(310.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val r = size.minDimension / 2; val c = center; val a = intro.value
-                    val rot = t * 360f
-                    fun arc(f: Float, start: Float, sweep: Float, col: Color, w: Float) =
-                        drawArc(col, start, sweep, false, Offset(c.x - r * f, c.y - r * f),
-                            Size(2 * r * f, 2 * r * f), style = Stroke(w, cap = StrokeCap.Round))
-                    drawCircle(Red.copy(alpha = 0.20f * a), r * 0.97f, style = Stroke(2f))
-                    drawCircle(Red.copy(alpha = 0.12f * a), r * 0.78f, style = Stroke(2f))
-                    for (i in 0 until 72) {
-                        val ang = (i * 5f + rot * 0.5f) * (PI.toFloat() / 180f)
-                        val long = i % 6 == 0
-                        val r1 = r * (if (long) 0.90f else 0.93f); val r2 = r * 0.95f
-                        drawLine(Red.copy(alpha = (if (long) 0.55f else 0.20f) * a),
-                            Offset(c.x + cos(ang) * r1, c.y + sin(ang) * r1),
-                            Offset(c.x + cos(ang) * r2, c.y + sin(ang) * r2), 2f)
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val s = if (maxWidth < maxHeight) maxWidth else maxHeight
+                Box(Modifier.size(s * 0.96f), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val r = size.minDimension / 2; val c = center; val a = intro.value
+                        val rot = t * 360f
+                        fun arc(f: Float, start: Float, sweep: Float, col: Color, w: Float) =
+                            drawArc(col, start, sweep, false, Offset(c.x - r * f, c.y - r * f),
+                                Size(2 * r * f, 2 * r * f), style = Stroke(w, cap = StrokeCap.Round))
+                        drawCircle(Red.copy(alpha = 0.22f * a), r * 0.98f, style = Stroke(1.5f))
+                        drawCircle(Red.copy(alpha = 0.14f * a), r * 0.84f, style = Stroke(1.5f))
+                        for (i in 0 until 4) {
+                            val ang = (i * 90f + 45f) * (PI.toFloat() / 180f)
+                            drawLine(Red.copy(alpha = 0.6f * a),
+                                Offset(c.x + cos(ang) * r * 0.955f, c.y + sin(ang) * r * 0.955f),
+                                Offset(c.x + cos(ang) * r * 1.0f, c.y + sin(ang) * r * 1.0f), 3f)
+                        }
+                        arc(0.98f, rot, 75f, Red.copy(alpha = (0.45f + 0.5f * energy) * a), 4f)
+                        arc(0.98f, rot + 180f, 40f, Red.copy(alpha = 0.35f * a), 3f)
+                        arc(0.84f, -rot * 2, 50f, Red.copy(alpha = (0.35f + 0.4f * energy) * a), 3f)
+                        arc(0.91f, rot * 3, 24f, Red.copy(alpha = ((energy - 0.3f).coerceAtLeast(0f) * 1.4f) * a), 3f)
                     }
-                    arc(0.97f, rot, 70f, Red.copy(alpha = (0.5f + 0.5f * energy) * a), 5f)
-                    arc(0.78f, -rot * 2, 40f, Red.copy(alpha = 0.6f * a), 4f)
-                    arc(0.86f, rot * 3, 28f, Red.copy(alpha = ((energy - 0.35f).coerceAtLeast(0f) * 1.4f) * a), 4f)
-                }
-                UltronFace(
-                    Modifier.size(190.dp).graphicsLayer {
-                        val s = (0.8f + 0.2f * intro.value) * (1f + 0.012f * sin(t * TAU * 3))
-                        scaleX = s; scaleY = s; alpha = intro.value
-                    },
-                    glow = { 0.40f + 0.60f * energy * (0.8f + 0.2f * sin(t * TAU * 6)) },
-                    boot = { ((intro.value - 0.5f) * 2f).coerceIn(0f, 1f) },
-                    scan = { if (status == "processing" || status == "listening") (t * 4f) % 1f else -1f }
-                )
-            }
-
-            // live waveform
-            Canvas(Modifier.width(150.dp).height(36.dp)) {
-                val n = 17; val bw = size.width / (n * 2f)
-                val act = when (status) { "listening" -> 1f; "responding" -> 0.7f; "processing" -> 0.35f; else -> 0.08f }
-                for (i in 0 until n) {
-                    val v = abs(sin(t * TAU * (3 + i % 3) + i * 0.8f))
-                    val hh = size.height * (0.08f + 0.92f * v * act)
-                    drawRoundRect(Red.copy(alpha = 0.35f + 0.55f * act), Offset(bw * (2 * i) + bw / 2, (size.height - hh) / 2),
-                        Size(bw, hh), CornerRadius(bw / 2))
+                    Box(
+                        Modifier.fillMaxWidth(0.62f).aspectRatio(HEAD_AR).graphicsLayer {
+                            val sc = (0.8f + 0.2f * intro.value) * (1f + 0.010f * sin(t * TAU * 3))
+                            scaleX = sc; scaleY = sc; alpha = intro.value
+                        }
+                    ) {
+                        Image(painterResource(R.drawable.ultron_head), null, Modifier.matchParentSize(), contentScale = ContentScale.Fit)
+                        Canvas(Modifier.matchParentSize()) {
+                            val b = ((intro.value - 0.5f) * 2f).coerceIn(0f, 1f)
+                            val fl = if (b < 1f && (b * 20).toInt() % 2 == 1) 0.3f else 1f
+                            val g = (0.30f + 0.70f * energy * (0.8f + 0.2f * sin(t * TAU * 6))) * b * fl
+                            for ((ex, ey) in listOf(ELX to ELY, ERX to ERY)) {
+                                val c = Offset(size.width * ex, size.height * ey); val rr = size.width * 0.17f
+                                drawCircle(
+                                    Brush.radialGradient(listOf(Red.copy(alpha = (0.65f * g).coerceIn(0f, 1f)), Color.Transparent), center = c, radius = rr),
+                                    rr, c, blendMode = BlendMode.Plus
+                                )
+                            }
+                        }
+                    }
                 }
             }
-            Spacer(Modifier.height(14.dp))
 
-            // glass reply card with typewriter text
-            Box(
-                Modifier.padding(horizontal = 24.dp).fillMaxWidth().heightIn(min = 64.dp).animateContentSize()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Brush.linearGradient(listOf(Color.White.copy(alpha = 0.09f), Color.White.copy(alpha = 0.02f))))
-                    .border(1.dp, Brush.linearGradient(listOf(Red.copy(alpha = 0.6f), Color.Transparent, Red.copy(alpha = 0.3f))), RoundedCornerShape(22.dp))
-                    .padding(18.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    shown + if (shown.length < line.length) "▌" else "",
-                    color = Color(0xFFD0D4E0), fontSize = 14.sp, letterSpacing = 2.sp, textAlign = TextAlign.Center
-                )
-            }
-
-            Spacer(Modifier.weight(1f))
+            Text(
+                shown + if (shown.length < line.length) "▌" else "",
+                color = Dim, fontSize = 14.sp, letterSpacing = 3.sp, textAlign = TextAlign.Center, maxLines = 6,
+                modifier = Modifier.padding(horizontal = 32.dp).heightIn(min = 52.dp).animateContentSize()
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(Modifier.width(36.dp).height(2.dp).background(Red))
+            Spacer(Modifier.height(10.dp))
 
             AnimatedVisibility(
                 typing,
@@ -221,30 +211,41 @@ fun UltronApp() {
                 }
             }
 
-            // bottom controls
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 24.dp),
+                Modifier.fillMaxWidth().padding(start = 34.dp, end = 34.dp, top = 6.dp, bottom = 26.dp),
                 horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
             ) {
-                GlassChip("VOICE") { mic() }
+                Column(Modifier.clickable { mic() }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Canvas(Modifier.size(26.dp)) {
+                        val w = size.width; val h = size.height
+                        drawCircle(Dim, w * .28f, Offset(w / 2, h * .38f), style = Stroke(2.5f))
+                        drawLine(Dim, Offset(w / 2, h * .66f), Offset(w / 2, h * .92f), 2.5f)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("VOICE", color = Dim, fontSize = 11.sp, letterSpacing = 2.sp)
+                }
 
                 val src = remember { MutableInteractionSource() }
                 val pressed by src.collectIsPressedAsState()
                 val press by animateFloatAsState(if (pressed) 0.90f else 1f, spring(dampingRatio = 0.45f), label = "press")
-                Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
-                    Canvas(Modifier.requiredSize(260.dp)) {
+                Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.requiredSize(280.dp)) {
+                        drawCircle(Red.copy(alpha = 0.12f), 66.dp.toPx(), style = Stroke(1.5f))
                         if (status == "listening") for (k in 0..1) {
                             val f = ((t * 6f) + k * 0.5f) % 1f
-                            drawCircle(Red.copy(alpha = 0.45f * (1f - f)), 50.dp.toPx() + 65.dp.toPx() * f, style = Stroke(3f))
+                            drawCircle(Red.copy(alpha = 0.45f * (1f - f)), 54.dp.toPx() + 70.dp.toPx() * f, style = Stroke(3f))
                         }
                     }
                     Box(
-                        Modifier.size(100.dp).graphicsLayer { scaleX = press; scaleY = press }
-                            .clip(CircleShape).background(Red.copy(alpha = 0.10f))
+                        Modifier.size(112.dp).graphicsLayer { scaleX = press; scaleY = press }
                             .drawBehind {
-                                val g = 0.45f + 0.55f * energy * (0.8f + 0.2f * sin(t * TAU * 6))
-                                drawCircle(Red.copy(alpha = 0.25f * g), size.minDimension / 2 + 6f, style = Stroke(10f))
-                                drawCircle(Red.copy(alpha = g), size.minDimension / 2 - 2f, style = Stroke(4f))
+                                val rc = size.minDimension / 2
+                                val g = 0.55f + 0.45f * energy * (0.8f + 0.2f * sin(t * TAU * 6))
+                                drawCircle(Color(0xFF12080B), rc - 12.dp.toPx())
+                                drawCircle(Red.copy(alpha = 0.22f * g), rc - 3.dp.toPx(), style = Stroke(14.dp.toPx()))
+                                drawCircle(Red.copy(alpha = 0.50f * g), rc - 5.dp.toPx(), style = Stroke(8.dp.toPx()))
+                                drawCircle(Red.copy(alpha = g), rc - 7.dp.toPx(), style = Stroke(3.dp.toPx()))
+                                drawCircle(Red.copy(alpha = 0.35f * g), rc - 18.dp.toPx(), style = Stroke(1.5f))
                             }
                             .clickable(interactionSource = src, indication = null) { mic() },
                         contentAlignment = Alignment.Center
@@ -258,7 +259,15 @@ fun UltronApp() {
                     }
                 }
 
-                GlassChip("TYPE") { typing = !typing }
+                Column(Modifier.clickable { typing = !typing }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Canvas(Modifier.size(26.dp)) {
+                        val w = size.width; val h = size.height
+                        drawRoundRect(Dim, Offset(w * .12f, h * .08f), Size(w * .76f, h * .84f), CornerRadius(w * .12f), style = Stroke(2.5f))
+                        for (i in 0..2) drawLine(Dim, Offset(w * .28f, h * (.32f + i * .18f)), Offset(w * .72f, h * (.32f + i * .18f)), 2.5f)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("TYPE", color = Dim, fontSize = 11.sp, letterSpacing = 2.sp)
+                }
             }
         }
     }
@@ -266,55 +275,8 @@ fun UltronApp() {
     if (settings) SettingsDialog(ctx) { settings = false }
 }
 
-@Composable
-fun GlassChip(label: String, onClick: () -> Unit) {
-    Text(
-        label, color = Dim, fontSize = 11.sp, letterSpacing = 2.sp,
-        modifier = Modifier.clip(RoundedCornerShape(50))
-            .background(Color.White.copy(alpha = 0.06f))
-            .border(1.dp, Red.copy(alpha = 0.25f), RoundedCornerShape(50))
-            .clickable { onClick() }.padding(horizontal = 16.dp, vertical = 9.dp)
-    )
-}
-
-@Composable
-fun UltronFace(mod: Modifier, glow: () -> Float, boot: () -> Float, scan: () -> Float) {
-    Canvas(mod) {
-        val w = size.width; val h = size.height
-        val g = glow(); val b = boot(); val sc = scan()
-        val head = Path().apply {
-            moveTo(w * .5f, h * .02f)
-            cubicTo(w * .8f, h * .05f, w * .92f, h * .35f, w * .85f, h * .6f)
-            lineTo(w * .62f, h * .95f); lineTo(w * .38f, h * .95f); lineTo(w * .15f, h * .6f)
-            cubicTo(w * .08f, h * .35f, w * .2f, h * .05f, w * .5f, h * .02f)
-            close()
-        }
-        drawPath(head, Brush.verticalGradient(listOf(Color(0xFF3C3C42), Color(0xFF0C0C0E))))
-        drawPath(head, Brush.linearGradient(listOf(Color.White.copy(alpha = 0.10f), Color.Transparent),
-            start = Offset(0f, 0f), end = Offset(w, h)))
-        drawPath(head, Red.copy(alpha = 0.30f + 0.40f * g * b), style = Stroke(w * .012f))
-        drawLine(Red.copy(alpha = 0.4f * b), Offset(w * .5f, h * .05f), Offset(w * .5f, h * .38f), w * .01f)
-        drawLine(Red.copy(alpha = 0.3f * b), Offset(w * .5f, h * .62f), Offset(w * .5f, h * .93f), w * .008f)
-        val fl = if (b < 1f && (b * 20).toInt() % 2 == 1) 0.3f else 1f   // boot flicker
-        for (l in listOf(true, false)) {
-            fun x(v: Float) = w * (if (l) v else 1f - v)
-            val e = Path().apply {
-                moveTo(x(.24f), h * .40f); lineTo(x(.46f), h * .49f)
-                lineTo(x(.41f), h * .55f); lineTo(x(.27f), h * .47f); close()
-            }
-            drawPath(e, Red.copy(alpha = (0.45f * g * b * fl).coerceIn(0f, 1f)), style = Stroke(w * .05f))
-            drawPath(e, Red.copy(alpha = (0.30f * g * b * fl).coerceIn(0f, 1f)), style = Stroke(w * .025f))
-            drawPath(e, Color(0xFFFF5060).copy(alpha = ((0.35f + 0.65f * g) * b * fl).coerceIn(0f, 1f)))
-        }
-        if (sc >= 0f) clipPath(head) {
-            val y = h * (0.1f + 0.8f * sc); val band = h * 0.06f
-            drawRect(
-                Brush.verticalGradient(listOf(Color.Transparent, Red.copy(alpha = 0.55f), Color.Transparent),
-                    startY = y - band, endY = y + band),
-                Offset(0f, y - band), Size(w, band * 2)
-            )
-        }
-    }
+private fun toast(ctx: Context, msg: String) {
+    Handler(Looper.getMainLooper()).post { Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show() }
 }
 
 @Composable
@@ -324,6 +286,10 @@ fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
     var voice by remember { mutableStateOf(Cfg.get(ctx, "voice")) }
     var model by remember { mutableStateOf(Cfg.get(ctx, "model")) }
     fun open(i: Intent) = ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    fun save() {
+        Cfg.set(ctx, "gemini", gem.trim()); Cfg.set(ctx, "fish", fish.trim())
+        Cfg.set(ctx, "voice", voice.trim()); Cfg.set(ctx, "model", model.trim())
+    }
     AlertDialog(
         onDismissRequest = onClose,
         containerColor = Color(0xFF111114),
@@ -333,11 +299,19 @@ fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
                 @Composable
                 fun f(v: String, ch: (String) -> Unit, lbl: String) =
                     OutlinedTextField(v, ch, Modifier.fillMaxWidth().padding(vertical = 4.dp), singleLine = true, label = { Text(lbl) })
-                f(gem, { gem = it }, "Gemini API key (brain)")
-                f(model, { model = it }, "Model (blank = gemini-2.5-flash)")
+                f(gem, { gem = it }, "Google API key (brain)")
+                f(model, { model = it }, "Model (leave blank)")
                 f(fish, { fish = it }, "Fish Audio API key (voice)")
                 f(voice, { voice = it }, "Voice model id")
                 Spacer(Modifier.height(8.dp))
+                TextButton({
+                    save(); toast(ctx, "Testing brain…")
+                    Thread { toast(ctx, Brain.ask(ctx, "Say hello in five words.")) }.start()
+                }) { Text("TEST BRAIN", color = Red) }
+                TextButton({
+                    save(); toast(ctx, "Testing voice…")
+                    Voice.speak(ctx, "I am Ultron. I am online.") { toast(ctx, Voice.lastError.ifBlank { "Voice played OK" }) }
+                }) { Text("TEST VOICE", color = Red) }
                 TextButton({ open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))) }) { Text("1. Allow overlay", color = Red) }
                 TextButton({ open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("2. Enable accessibility (control apps)", color = Red) }
                 TextButton({
@@ -347,11 +321,6 @@ fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
                 TextButton({ ctx.stopService(Intent(ctx, OverlayService::class.java)) }) { Text("Stop overlay", color = Dim) }
             }
         },
-        confirmButton = {
-            TextButton({
-                Cfg.set(ctx, "gemini", gem.trim()); Cfg.set(ctx, "fish", fish.trim())
-                Cfg.set(ctx, "voice", voice.trim()); Cfg.set(ctx, "model", model.trim()); onClose()
-            }) { Text("SAVE", color = Red) }
-        }
+        confirmButton = { TextButton({ save(); onClose() }) { Text("SAVE", color = Red) } }
     )
 }
