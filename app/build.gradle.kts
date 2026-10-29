@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+fun secret(name: String): String =
+    (System.getenv(name) ?: "").filter { !it.isWhitespace() && it != '"' && it != '\\' }
+
 android {
     namespace = "com.ultron.assistant"
     compileSdk = 34
@@ -9,15 +13,21 @@ android {
         applicationId = "com.ultron.assistant"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "2.0"
+        buildConfigField("String", "GOOGLE_KEY", "\"${secret("GOOGLE_API_KEY")}\"")
+        buildConfigField("String", "FISH_KEY", "\"${secret("FISH_API_KEY")}\"")
+        buildConfigField("String", "VOICE_ID", "\"23866d1d2134461cbcefe95d1bd8bfcf\"")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 }
 dependencies {

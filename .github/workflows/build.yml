@@ -17,7 +17,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
-      - run: gradle assembleDebug --no-daemon
+      - name: Build
+        run: gradle assembleDebug --no-daemon
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          FISH_API_KEY: ${{ secrets.FISH_API_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: Ultron-APK

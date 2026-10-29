@@ -52,11 +52,11 @@ import kotlin.math.sin
 val Red = Color(0xFFFF2030)
 val Dim = Color(0xFF9AA0B0)
 val TAU = 6.2831855f
-private const val HEAD_AR = 0.833f
-private const val ELX = 0.283f
-private const val ELY = 0.503f
-private const val ERX = 0.669f
-private const val ERY = 0.521f
+private const val HEAD_AR = 0.889f
+private const val ELX = 0.301f
+private const val ELY = 0.467f
+private const val ERX = 0.689f
+private const val ERY = 0.465f
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(b: Bundle?) {
@@ -165,7 +165,7 @@ fun UltronApp() {
                         arc(0.91f, rot * 3, 24f, Red.copy(alpha = ((energy - 0.3f).coerceAtLeast(0f) * 1.4f) * a), 3f)
                     }
                     Box(
-                        Modifier.fillMaxWidth(0.62f).aspectRatio(HEAD_AR).graphicsLayer {
+                        Modifier.fillMaxWidth(0.68f).aspectRatio(HEAD_AR).graphicsLayer {
                             val sc = (0.8f + 0.2f * intro.value) * (1f + 0.010f * sin(t * TAU * 3))
                             scaleX = sc; scaleY = sc; alpha = intro.value
                         }
@@ -178,7 +178,7 @@ fun UltronApp() {
                             for ((ex, ey) in listOf(ELX to ELY, ERX to ERY)) {
                                 val c = Offset(size.width * ex, size.height * ey); val rr = size.width * 0.17f
                                 drawCircle(
-                                    Brush.radialGradient(listOf(Red.copy(alpha = (0.65f * g).coerceIn(0f, 1f)), Color.Transparent), center = c, radius = rr),
+                                    Brush.radialGradient(listOf(Red.copy(alpha = (0.45f * g).coerceIn(0f, 1f)), Color.Transparent), center = c, radius = rr),
                                     rr, c, blendMode = BlendMode.Plus
                                 )
                             }
@@ -281,35 +281,26 @@ private fun toast(ctx: Context, msg: String) {
 
 @Composable
 fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
-    var gem by remember { mutableStateOf(Cfg.get(ctx, "gemini")) }
-    var fish by remember { mutableStateOf(Cfg.get(ctx, "fish")) }
-    var voice by remember { mutableStateOf(Cfg.get(ctx, "voice")) }
-    var model by remember { mutableStateOf(Cfg.get(ctx, "model")) }
+    var lang by remember { mutableStateOf(Cfg.get(ctx, "lang").ifBlank { "auto" }) }
+    val langName = LANGS.firstOrNull { it.first == lang }?.second ?: "Auto"
     fun open(i: Intent) = ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    fun save() {
-        Cfg.set(ctx, "gemini", gem.trim()); Cfg.set(ctx, "fish", fish.trim())
-        Cfg.set(ctx, "voice", voice.trim()); Cfg.set(ctx, "model", model.trim())
-    }
     AlertDialog(
         onDismissRequest = onClose,
         containerColor = Color(0xFF111114),
         title = { Text("ULTRON SETTINGS", color = Red, letterSpacing = 3.sp, fontSize = 16.sp) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                @Composable
-                fun f(v: String, ch: (String) -> Unit, lbl: String) =
-                    OutlinedTextField(v, ch, Modifier.fillMaxWidth().padding(vertical = 4.dp), singleLine = true, label = { Text(lbl) })
-                f(gem, { gem = it }, "Google API key (brain)")
-                f(model, { model = it }, "Model (leave blank)")
-                f(fish, { fish = it }, "Fish Audio API key (voice)")
-                f(voice, { voice = it }, "Voice model id")
-                Spacer(Modifier.height(8.dp))
                 TextButton({
-                    save(); toast(ctx, "Testing brain…")
+                    val i = LANGS.indexOfFirst { it.first == lang }
+                    lang = LANGS[(i + 1) % LANGS.size].first
+                    Cfg.set(ctx, "lang", lang)
+                }) { Text("Listening language: $langName  ›", color = Red) }
+                TextButton({
+                    toast(ctx, "Testing brain…")
                     Thread { toast(ctx, Brain.ask(ctx, "Say hello in five words.")) }.start()
                 }) { Text("TEST BRAIN", color = Red) }
                 TextButton({
-                    save(); toast(ctx, "Testing voice…")
+                    toast(ctx, "Testing voice…")
                     Voice.speak(ctx, "I am Ultron. I am online.") { toast(ctx, Voice.lastError.ifBlank { "Voice played OK" }) }
                 }) { Text("TEST VOICE", color = Red) }
                 TextButton({ open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))) }) { Text("1. Allow overlay", color = Red) }
@@ -321,6 +312,6 @@ fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
                 TextButton({ ctx.stopService(Intent(ctx, OverlayService::class.java)) }) { Text("Stop overlay", color = Dim) }
             }
         },
-        confirmButton = { TextButton({ save(); onClose() }) { Text("SAVE", color = Red) } }
+        confirmButton = { TextButton(onClose) { Text("DONE", color = Red) } }
     )
 }

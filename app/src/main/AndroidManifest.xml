@@ -20,7 +20,7 @@
 
     <application
         android:label="Ultron"
-        android:icon="@drawable/ic_ultron"
+        android:icon="@drawable/ic_overlay"
         android:theme="@style/Theme.Ultron"
         android:allowBackup="false">
 

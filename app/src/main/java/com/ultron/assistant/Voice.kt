@@ -10,6 +10,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -28,7 +29,7 @@ object Voice {
             val fk = Cfg.get(app, "fish").trim()
             lastError = ""
             if (fk.isNotBlank() && fish(app, text, fk)) { done(); return@execute }
-            if (fk.isBlank()) lastError = "No Fish Audio key, using system voice"
+            if (fk.isBlank()) lastError = "No Fish key (add FISH_API_KEY secret), using system voice"
             main.post { local(app, text, done) }
         }
     }
@@ -77,6 +78,8 @@ object Voice {
         fun go() {
             val t = tts ?: return done()
             t.setPitch(0.5f); t.setSpeechRate(0.88f)
+            val lg = Cfg.get(app, "lang")
+            if (lg.isNotBlank() && lg != "auto") t.setLanguage(Locale.forLanguageTag(lg))
             t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(u: String?) {}
                 override fun onDone(u: String?) { done() }

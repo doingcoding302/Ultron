@@ -28,8 +28,11 @@ class Ears(private val ctx: Context, private val onText: (String) -> Unit) {
             override fun onPartialResults(b: Bundle?) {}
             override fun onEvent(t: Int, b: Bundle?) {}
         })
-        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        val lg = Cfg.get(ctx, "lang")
+        if (lg.isNotBlank() && lg != "auto") i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lg)
+        r.startListening(i)
     }
 
     fun stop() { try { sr?.destroy() } catch (_: Exception) {}; sr = null }

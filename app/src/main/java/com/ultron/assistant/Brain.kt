@@ -9,7 +9,8 @@ import java.net.URL
 object Brain {
     private const val SYS = "You are ULTRON, the user's personal AI assistant living on their tablet. " +
         "Calm, dry, confident, with a faint menacing wit, but always loyal and genuinely helpful. " +
-        "Your replies are spoken aloud, so keep them to 1-3 short sentences. Plain text only, no markdown."
+        "Your replies are spoken aloud, so keep them to 1-3 short sentences. Plain text only, no markdown. " +
+        "Always reply in the same language the user speaks or writes, using that language's normal script."
 
     private fun call(url: String, key: String, vertex: Boolean, body: String): Pair<Int, String> {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -26,7 +27,7 @@ object Brain {
 
     fun ask(ctx: Context, q: String): String {
         val key = Cfg.get(ctx, "gemini").trim()
-        if (key.isBlank()) return "Open my settings and give me an API key first."
+        if (key.isBlank()) return "My Google key is missing. Add the GOOGLE_API_KEY secret on GitHub and rebuild."
         // Keys starting with "AQ." are Google Vertex AI keys; "AIza..." are AI Studio keys.
         val vertex = key.startsWith("AQ.")
         val userModel = Cfg.get(ctx, "model").trim()
