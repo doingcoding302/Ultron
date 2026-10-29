@@ -1,0 +1,1681 @@
+#!/usr/bin/env bash
+# FINAL BUILD (animated UI, overlay, call announcer, boot start)
+# Run:  bash setup_ultron_final.sh   -> creates ./ultron-assistant (full Android project)
+# Then: cd ultron-assistant && git init && git add . && git commit -m init
+#       push to a GitHub repo -> Actions tab -> "Build APK" -> download artifact.
+set -e
+P=ultron-assistant
+J=$P/app/src/main/java/com/ultron/assistant
+R=$P/app/src/main/res
+mkdir -p $J $R/values $R/xml $R/drawable $P/.github/workflows
+
+cat > $P/.gitignore <<'EOF'
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+EOF
+
+cat > $P/.github/workflows/build.yml <<'EOF'
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Accept Android licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ultron-APK
+          path: app/build/outputs/apk/debug/*.apk
+EOF
+
+cat > $P/settings.gradle.kts <<'EOF'
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "Ultron"
+include(":app")
+EOF
+
+cat > $P/build.gradle.kts <<'EOF'
+plugins {
+    id("com.android.application") version "8.5.2" apply false
+    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+}
+EOF
+
+cat > $P/gradle.properties <<'EOF'
+org.gradle.jvmargs=-Xmx3g
+android.useAndroidX=true
+kotlin.code.style=official
+EOF
+
+cat > $P/app/build.gradle.kts <<'EOF'
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+android {
+    namespace = "com.ultron.assistant"
+    compileSdk = 34
+    defaultConfig {
+        applicationId = "com.ultron.assistant"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 3
+        versionName = "1.2"
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+    buildFeatures { compose = true }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+}
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+}
+EOF
+
+cat > $P/app/src/main/AndroidManifest.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
+    <uses-permission android:name="android.permission.READ_CALL_LOG"/>
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    <uses-permission android:name="android.permission.CALL_PHONE"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <queries>
+        <intent><action android:name="android.intent.action.TTS_SERVICE"/></intent>
+        <intent><action android:name="android.speech.RecognitionService"/></intent>
+    </queries>
+
+    <application
+        android:label="Ultron"
+        android:icon="@drawable/ic_ultron"
+        android:theme="@style/Theme.Ultron"
+        android:allowBackup="false">
+
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <service android:name=".OverlayService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="floating assistant overlay"/>
+        </service>
+
+        <service android:name=".UltronAccess" android:exported="false"
+            android:label="Ultron"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility"/>
+        </service>
+
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".CallReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
+EOF
+
+cat > $R/values/themes.xml <<'EOF'
+<resources>
+    <style name="Theme.Ultron" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+</resources>
+EOF
+
+cat > $R/values/strings.xml <<'EOF'
+<resources>
+    <string name="app_name">Ultron</string>
+    <string name="acc_desc">Lets Ultron tap, scroll, type and navigate other apps for you.</string>
+</resources>
+EOF
+
+cat > $R/xml/accessibility.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:description="@string/acc_desc"/>
+EOF
+
+cat > $R/drawable/ic_ultron.xml <<'EOF'
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#FF14141A" android:strokeColor="#FFFF2030" android:strokeWidth="1"
+        android:pathData="M24,3 C34,4 40,16 37,28 L30,44 L18,44 L11,28 C8,16 14,4 24,3 Z"/>
+    <path android:fillColor="#FFFF2030" android:pathData="M13,19 L22,23 L20,26 L14,22 Z"/>
+    <path android:fillColor="#FFFF2030" android:pathData="M35,19 L26,23 L28,26 L34,22 Z"/>
+</vector>
+EOF
+
+mkdir -p $R/drawable-nodpi
+base64 -d > $R/drawable-nodpi/ultron_head.webp <<'B64'
+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
+u7tMkDisxWP+WTi6XC5SeAAA
+B64
+
+# ---------------- Kotlin ----------------
+
+cat > $J/Cfg.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.Context
+
+object Cfg {
+    const val DEFAULT_VOICE = "23866d1d2134461cbcefe95d1bd8bfcf"
+    private fun sp(c: Context) = c.getSharedPreferences("ultron", Context.MODE_PRIVATE)
+    fun get(c: Context, k: String): String =
+        sp(c).getString(k, if (k == "voice") DEFAULT_VOICE else "") ?: ""
+    fun set(c: Context, k: String, v: String) { sp(c).edit().putString(k, v).apply() }
+
+    fun addMissed(c: Context, line: String) {
+        val all = (listOf(line) + get(c, "missed").split("\n").filter { it.isNotBlank() }).take(20)
+        set(c, "missed", all.joinToString("\n"))
+    }
+    fun missed(c: Context): List<String> = get(c, "missed").split("\n").filter { it.isNotBlank() }
+}
+EOF
+
+cat > $J/Brain.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+object Brain {
+    private const val SYS = "You are ULTRON, the user's personal AI assistant living on their tablet. " +
+        "Calm, dry, confident, with a faint menacing wit, but always loyal and genuinely helpful. " +
+        "Your replies are spoken aloud, so keep them to 1-3 short sentences. Plain text only, no markdown."
+
+    private fun call(url: String, key: String, vertex: Boolean, body: String): Pair<Int, String> {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.setRequestProperty("Content-Type", "application/json")
+        if (!vertex) c.setRequestProperty("x-goog-api-key", key)
+        c.connectTimeout = 15000; c.readTimeout = 40000
+        c.doOutput = true
+        c.outputStream.use { it.write(body.toByteArray()) }
+        val code = c.responseCode
+        val txt = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+        return Pair(code, txt)
+    }
+
+    fun ask(ctx: Context, q: String): String {
+        val key = Cfg.get(ctx, "gemini").trim()
+        if (key.isBlank()) return "Open my settings and give me an API key first."
+        // Keys starting with "AQ." are Google Vertex AI keys; "AIza..." are AI Studio keys.
+        val vertex = key.startsWith("AQ.")
+        val userModel = Cfg.get(ctx, "model").trim()
+        val models = if (userModel.isNotBlank()) listOf(userModel)
+            else listOf("gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite")
+        val body = JSONObject()
+            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYS))))
+            .put("contents", JSONArray().put(JSONObject().put("role", "user")
+                .put("parts", JSONArray().put(JSONObject().put("text", q)))))
+            .toString()
+        var last = ""
+        for (m in models) {
+            val url = if (vertex)
+                "https://aiplatform.googleapis.com/v1/publishers/google/models/$m:generateContent?key=$key"
+            else "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent"
+            val (code, txt) = try { call(url, key, vertex, body) } catch (e: Exception) { return "I can't reach the network: ${e.message}" }
+            if (code < 400) {
+                return try {
+                    JSONObject(txt).getJSONArray("candidates").getJSONObject(0)
+                        .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                        .getString("text").replace(Regex("[*#`]"), "").trim()
+                } catch (e: Exception) { "I got an empty answer. Try again." }
+            }
+            val msg = try { JSONObject(txt).getJSONObject("error").getString("message").take(110) } catch (e: Exception) { "" }
+            last = "Request failed, code $code. $msg"
+            if (code != 404) break
+        }
+        return last
+    }
+}
+EOF
+
+cat > $J/Voice.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.Context
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+object Voice {
+    private var tts: TextToSpeech? = null
+    private var ready = false
+    private var player: MediaPlayer? = null
+    private val bg = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile var lastError = ""
+
+    fun speak(ctx: Context, text: String, done: () -> Unit = {}) {
+        val app = ctx.applicationContext
+        bg.execute {
+            val fk = Cfg.get(app, "fish").trim()
+            lastError = ""
+            if (fk.isNotBlank() && fish(app, text, fk)) { done(); return@execute }
+            if (fk.isBlank()) lastError = "No Fish Audio key, using system voice"
+            main.post { local(app, text, done) }
+        }
+    }
+
+    fun stop() {
+        try { player?.stop() } catch (_: Exception) {}
+        try { tts?.stop() } catch (_: Exception) {}
+    }
+
+    // Fish Audio TTS with the Ultron voice model id
+    private fun fish(app: Context, text: String, key: String): Boolean {
+        for (m in listOf<String?>("s1", null)) {
+            try {
+                val c = URL("https://api.fish.audio/v1/tts").openConnection() as HttpURLConnection
+                c.requestMethod = "POST"
+                c.setRequestProperty("Authorization", "Bearer $key")
+                c.setRequestProperty("Content-Type", "application/json")
+                if (m != null) c.setRequestProperty("model", m)
+                c.connectTimeout = 15000; c.readTimeout = 60000
+                c.doOutput = true
+                val body = JSONObject().put("text", text)
+                    .put("reference_id", Cfg.get(app, "voice").trim()).put("format", "mp3")
+                c.outputStream.use { it.write(body.toString().toByteArray()) }
+                val code = c.responseCode
+                if (code >= 400) { lastError = "Fish voice error $code"; continue }
+                val f = File(app.cacheDir, "u.mp3")
+                c.inputStream.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                val latch = CountDownLatch(1)
+                val mp = MediaPlayer()
+                player = mp
+                mp.setDataSource(f.absolutePath)
+                mp.setOnCompletionListener { latch.countDown() }
+                mp.setOnErrorListener { _, _, _ -> latch.countDown(); true }
+                mp.prepare(); mp.start()
+                latch.await(90, TimeUnit.SECONDS)
+                mp.release(); player = null
+                lastError = ""
+                return true
+            } catch (e: Exception) { lastError = "Fish voice failed: ${e.message}" }
+        }
+        return false
+    }
+
+    // Fallback: deep, slow system voice
+    private fun local(app: Context, text: String, done: () -> Unit) {
+        fun go() {
+            val t = tts ?: return done()
+            t.setPitch(0.5f); t.setSpeechRate(0.88f)
+            t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(u: String?) {}
+                override fun onDone(u: String?) { done() }
+                @Deprecated("Deprecated in Java")
+                override fun onError(u: String?) { done() }
+            })
+            t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "u")
+        }
+        if (ready) go() else tts = TextToSpeech(app) { s ->
+            if (s == TextToSpeech.SUCCESS) { ready = true; go() } else { lastError += " | no system voice engine"; done() }
+        }
+    }
+}
+EOF
+
+cat > $J/Ears.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+
+class Ears(private val ctx: Context, private val onText: (String) -> Unit) {
+    private var sr: SpeechRecognizer? = null
+
+    fun start() {
+        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) { onText(""); return }
+        stop()
+        val r = SpeechRecognizer.createSpeechRecognizer(ctx)
+        sr = r
+        r.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(p: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(v: Float) {}
+            override fun onBufferReceived(b: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onError(e: Int) { onText("") }
+            override fun onResults(b: Bundle?) {
+                onText(b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: "")
+            }
+            override fun onPartialResults(b: Bundle?) {}
+            override fun onEvent(t: Int, b: Bundle?) {}
+        })
+        r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+    }
+
+    fun stop() { try { sr?.destroy() } catch (_: Exception) {}; sr = null }
+}
+EOF
+
+cat > $J/Agent.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+
+object Agent {
+    private val h = Handler(Looper.getMainLooper())
+
+    /** States reported: processing -> responding -> idle. Callbacks run on main thread. */
+    fun run(ctx: Context, text: String, onState: (String) -> Unit, onReply: (String) -> Unit) {
+        val app = ctx.applicationContext
+        onState("processing")
+        Thread {
+            val r = try { Actions.handle(app, text) ?: Brain.ask(app, text) }
+            catch (e: Exception) { "Something went wrong: ${e.message}" }
+            h.post { onReply(r); onState("responding") }
+            Voice.speak(app, r) { h.post { onState("idle") } }
+        }.start()
+    }
+}
+EOF
+
+cat > $J/Actions.kt <<'EOF'
+package com.ultron.assistant
+
+import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.ContactsContract
+
+object Actions {
+    private const val NEED_ACC = "Enable my accessibility access first, then ask again."
+
+    /** Returns a spoken reply if this was a local command, or null to let the AI brain answer. */
+    fun handle(ctx: Context, raw: String): String? {
+        val t = raw.trim().lowercase().trimEnd('.', '!', '?')
+        val acc = UltronAccess.inst
+        Regex("^(open|launch|start)\\s+(.+)$").find(t)?.let { return openApp(ctx, it.groupValues[2]) }
+        Regex("^call\\s+(.+)$").find(t)?.let { return call(ctx, it.groupValues[1]) }
+        if (t in listOf("who called", "who called me", "missed calls", "any missed calls", "missed call")) {
+            val m = Cfg.missed(ctx)
+            return if (m.isEmpty()) "No missed calls on record." else m.take(3).joinToString(" ")
+        }
+        if (t == "go back" || t == "back") return acc?.let { it.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK); "Done." } ?: NEED_ACC
+        if (t == "go home" || t == "home") return acc?.let { it.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME); "Done." } ?: NEED_ACC
+        if (t == "recents" || t == "show recents") return acc?.let { it.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS); "Done." } ?: NEED_ACC
+        if (t == "scroll down") return acc?.let { if (it.scroll(true)) "Scrolling." else "Nothing to scroll." } ?: NEED_ACC
+        if (t == "scroll up") return acc?.let { if (it.scroll(false)) "Scrolling." else "Nothing to scroll." } ?: NEED_ACC
+        Regex("^(click|tap|press)\\s+(on\\s+)?(.+)$").find(t)?.let { m ->
+            return acc?.let { if (it.clickText(m.groupValues[3])) "Done." else "I can't find that on screen." } ?: NEED_ACC
+        }
+        Regex("^type\\s+(.+)$").find(t)?.let { m ->
+            return acc?.let { if (it.typeText(m.groupValues[1])) "Typed." else "No text field is focused." } ?: NEED_ACC
+        }
+        return null
+    }
+
+    private fun openApp(ctx: Context, name: String): String {
+        val pm = ctx.packageManager
+        val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val hit = pm.queryIntentActivities(q, 0).firstOrNull {
+            it.loadLabel(pm).toString().lowercase().contains(name.trim())
+        } ?: return "I can't find an app called $name."
+        val i = pm.getLaunchIntentForPackage(hit.activityInfo.packageName) ?: return "I can't launch that."
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(i)
+        return "Opening ${hit.loadLabel(pm)}."
+    }
+
+    private fun call(ctx: Context, who: String): String {
+        val digits = who.filter { it.isDigit() || it == '+' }
+        val num = if (digits.length >= 5 && who.none { it.isLetter() }) digits else Contacts.numberFor(ctx, who)
+        ?: return "I can't find $who in your contacts."
+        ctx.startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:$num")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return "Calling $who."
+    }
+}
+
+object Contacts {
+    fun nameFor(c: Context, num: String?): String? {
+        if (num.isNullOrBlank()) return null
+        try {
+            val u = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(num))
+            c.contentResolver.query(u, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) return it.getString(0)
+            }
+        } catch (_: Exception) {}
+        return null
+    }
+
+    fun numberFor(c: Context, name: String): String? {
+        try {
+            c.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?",
+                arrayOf("%$name%"), null
+            )?.use { if (it.moveToFirst()) return it.getString(0) }
+        } catch (_: Exception) {}
+        return null
+    }
+}
+EOF
+
+cat > $J/UltronAccess.kt <<'EOF'
+package com.ultron.assistant
+
+import android.accessibilityservice.AccessibilityService
+import android.os.Bundle
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+
+class UltronAccess : AccessibilityService() {
+    companion object { var inst: UltronAccess? = null }
+
+    override fun onServiceConnected() { inst = this }
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) {}
+    override fun onInterrupt() {}
+    override fun onDestroy() { inst = null; super.onDestroy() }
+
+    fun clickText(t: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        for (n in root.findAccessibilityNodeInfosByText(t)) {
+            var p: AccessibilityNodeInfo? = n
+            while (p != null) {
+                if (p.isClickable) return p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                p = p.parent
+            }
+        }
+        return false
+    }
+
+    fun scroll(forward: Boolean): Boolean {
+        val s = findScrollable(rootInActiveWindow ?: return false) ?: return false
+        return s.performAction(
+            if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        )
+    }
+
+    fun typeText(t: String): Boolean {
+        val f = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        val b = Bundle()
+        b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, t)
+        return f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
+    }
+
+    private fun findScrollable(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (n.isScrollable) return n
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            findScrollable(c)?.let { return it }
+        }
+        return null
+    }
+}
+EOF
+
+cat > $J/CallReceiver.kt <<'EOF'
+package com.ultron.assistant
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.telephony.TelephonyManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+class CallReceiver : BroadcastReceiver() {
+    companion object {
+        var last: String = TelephonyManager.EXTRA_STATE_IDLE
+        var num: String? = null
+        var answered = false
+        var at = 0L
+    }
+
+    override fun onReceive(c: Context, i: Intent) {
+        if (i.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
+        val s = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
+        val n = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
+        when (s) {
+            TelephonyManager.EXTRA_STATE_RINGING -> {
+                if (last != TelephonyManager.EXTRA_STATE_RINGING) { answered = false; at = System.currentTimeMillis(); num = null }
+                if (!n.isNullOrBlank()) num = n
+            }
+            TelephonyManager.EXTRA_STATE_OFFHOOK -> if (last == TelephonyManager.EXTRA_STATE_RINGING) answered = true
+            TelephonyManager.EXTRA_STATE_IDLE -> if (last == TelephonyManager.EXTRA_STATE_RINGING && !answered) report(c)
+        }
+        last = s
+    }
+
+    private fun report(c: Context) {
+        val pr = goAsync()
+        val who = Contacts.nameFor(c, num) ?: num ?: "an unknown number"
+        val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(at))
+        val msg = "You missed a call from $who at $time."
+        Cfg.addMissed(c, msg)
+        try {
+            val nm = c.getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(NotificationChannel("missed", "Missed calls", NotificationManager.IMPORTANCE_DEFAULT))
+            nm.notify(2, Notification.Builder(c, "missed").setSmallIcon(R.drawable.ic_ultron)
+                .setContentTitle("Ultron").setContentText(msg).build())
+        } catch (_: Exception) {}
+        Voice.speak(c, msg) { pr.finish() }
+    }
+}
+EOF
+
+cat > $J/OverlayService.kt <<'EOF'
+package com.ultron.assistant
+
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.view.animation.OvershootInterpolator
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import kotlin.math.abs
+
+class OverlayService : Service() {
+    private lateinit var wm: WindowManager
+    private lateinit var root: LinearLayout
+    private lateinit var icon: ImageView
+    private lateinit var ring: View
+    private lateinit var label: TextView
+    private lateinit var lp: WindowManager.LayoutParams
+    private lateinit var ears: Ears
+    private var state = "idle"
+    private var anim: ObjectAnimator? = null
+    private var ringAnim: ValueAnimator? = null
+
+    override fun onBind(i: Intent?) = null
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    override fun onCreate() {
+        super.onCreate()
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(NotificationChannel("ultron", "Ultron", NotificationManager.IMPORTANCE_MIN))
+        val n = Notification.Builder(this, "ultron").setSmallIcon(R.drawable.ic_ultron)
+            .setContentTitle("Ultron is online").build()
+        if (Build.VERSION.SDK_INT >= 34) startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        else startForeground(1, n)
+
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        ears = Ears(this) { text -> onHeard(text) }
+
+        ring = View(this).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(52), dp(52), Gravity.CENTER)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL; setColor(Color.TRANSPARENT)
+                setStroke(dp(2), Color.parseColor("#FFFF2030"))
+            }
+            alpha = 0f
+        }
+        icon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_ultron)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            layoutParams = FrameLayout.LayoutParams(dp(52), dp(52), Gravity.CENTER)
+        }
+        val frame = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(86), dp(86))
+            addView(ring); addView(icon)
+        }
+        label = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFD0D4E0")); textSize = 11f
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#D9101014"))
+                setStroke(dp(1), Color.parseColor("#66FF2030"))
+            }
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            visibility = View.GONE; maxWidth = dp(220)
+        }
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = Gravity.END
+            addView(frame); addView(label)
+        }
+        lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.END; x = dp(6); y = dp(110) }
+
+        var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
+        icon.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false
+                    icon.animate().scaleX(0.88f).scaleY(0.88f).setDuration(90).start()
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - sx).toInt(); val dy = (e.rawY - sy).toInt()
+                    if (abs(dx) > 10 || abs(dy) > 10) moved = true
+                    if (moved) { lp.x = ox - dx; lp.y = oy + dy; wm.updateViewLayout(root, lp) }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    icon.animate().scaleX(1f).scaleY(1f).setDuration(260)
+                        .setInterpolator(OvershootInterpolator(3f)).start()
+                    if (e.action == MotionEvent.ACTION_UP && !moved) tap()
+                }
+            }
+            true
+        }
+        wm.addView(root, lp)
+        // pop-in
+        root.scaleX = 0f; root.scaleY = 0f
+        root.animate().scaleX(1f).scaleY(1f).setDuration(520).setInterpolator(OvershootInterpolator(2.2f)).start()
+        setState("idle")
+    }
+
+    private fun tap() {
+        when (state) {
+            "idle" -> { setState("listening"); ears.start() }
+            else -> { ears.stop(); Voice.stop(); setState("idle") }   // quick exit
+        }
+    }
+
+    private fun onHeard(text: String) {
+        val t = text.trim().lowercase()
+        if (t.isBlank() || t == "stop" || t == "cancel") { Voice.stop(); setState("idle"); return }
+        Agent.run(this, text, { setState(it) }, { setState("responding", it) })
+    }
+
+    private fun setState(s: String, text: String? = null) {
+        state = s
+        anim?.cancel(); icon.alpha = 1f
+        ringAnim?.cancel(); ring.alpha = 0f
+        val red = Color.parseColor("#FFFF2030")
+        icon.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.parseColor("#E6000000"))
+            setStroke(dp(if (s == "idle") 1 else 2), if (s == "idle") Color.parseColor("#66FF2030") else red)
+        }
+        when (s) {
+            "idle" -> {
+                icon.alpha = 0.75f
+                label.animate().alpha(0f).setDuration(250).withEndAction { label.visibility = View.GONE }.start()
+            }
+            "listening" -> { showLabel("Listening…"); pulse(); ripple() }
+            "processing" -> { showLabel("Thinking…"); pulse() }
+            "responding" -> showLabel((text ?: "").take(90))
+        }
+    }
+
+    private fun showLabel(t: String) {
+        label.animate().cancel()
+        label.text = t
+        if (label.visibility != View.VISIBLE) { label.alpha = 0f; label.visibility = View.VISIBLE }
+        label.animate().alpha(1f).setDuration(220).start()
+    }
+
+    private fun pulse() {
+        anim = ObjectAnimator.ofFloat(icon, "alpha", 0.45f, 1f).apply {
+            duration = 700; repeatCount = ObjectAnimator.INFINITE; repeatMode = ObjectAnimator.REVERSE; start()
+        }
+    }
+
+    private fun ripple() {
+        ringAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 1100; repeatCount = ValueAnimator.INFINITE
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                ring.scaleX = 1f + 0.6f * f; ring.scaleY = 1f + 0.6f * f; ring.alpha = 0.7f * (1f - f)
+            }
+            start()
+        }
+    }
+
+    override fun onStartCommand(i: Intent?, f: Int, id: Int) = START_STICKY
+
+    override fun onDestroy() {
+        ears.stop(); anim?.cancel(); ringAnim?.cancel()
+        try { wm.removeView(root) } catch (_: Exception) {}
+        super.onDestroy()
+    }
+}
+EOF
+
+cat > $J/MainActivity.kt <<'EOF'
+package com.ultron.assistant
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+
+val Red = Color(0xFFFF2030)
+val Dim = Color(0xFF9AA0B0)
+val TAU = 6.2831855f
+private const val HEAD_AR = 0.833f
+private const val ELX = 0.283f
+private const val ELY = 0.503f
+private const val ERX = 0.669f
+private const val ERY = 0.521f
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(b: Bundle?) {
+        super.onCreate(b)
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}.launch(
+            arrayOf(
+                Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS,
+                Manifest.permission.CALL_PHONE, Manifest.permission.POST_NOTIFICATIONS
+            )
+        )
+        setContent {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Red, background = Color.Black, surface = Color(0xFF111114))) {
+                UltronApp()
+            }
+        }
+    }
+}
+
+@Composable
+fun UltronApp() {
+    val ctx = LocalContext.current
+    var status by remember { mutableStateOf("idle") }
+    var line by remember { mutableStateOf("HOW CAN I HELP YOU?") }
+    var typing by remember { mutableStateOf(false) }
+    var input by remember { mutableStateOf("") }
+    var settings by remember { mutableStateOf(false) }
+
+    fun run(txt: String) {
+        status = "processing"; line = "PROCESSING…"
+        Agent.run(ctx, txt, { s ->
+            status = s
+            if (s == "idle") line = "HOW CAN I HELP YOU?"
+        }, { r -> line = r })
+    }
+    val ears = remember {
+        Ears(ctx) { txt ->
+            if (txt.isBlank()) { status = "idle"; line = "I DIDN'T CATCH THAT" }
+            else { line = txt; run(txt) }
+        }
+    }
+    DisposableEffect(Unit) { onDispose { ears.stop() } }
+
+    fun mic() {
+        if (status == "listening") { ears.stop(); status = "idle"; line = "HOW CAN I HELP YOU?" }
+        else { Voice.stop(); status = "listening"; line = "LISTENING…"; ears.start() }
+    }
+
+    val inf = rememberInfiniteTransition(label = "t")
+    val t by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(12000, easing = LinearEasing)), label = "t")
+    val intro = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { intro.animateTo(1f, tween(1800, easing = FastOutSlowInEasing)) }
+    val energy by animateFloatAsState(
+        when (status) { "listening" -> 1f; "processing" -> 0.9f; "responding" -> 0.75f; else -> 0.3f },
+        tween(600), label = "energy"
+    )
+    var shown by remember { mutableStateOf("") }
+    LaunchedEffect(line) {
+        shown = ""
+        for (c in line.uppercase()) { shown += c; delay(if (line.length > 80) 6L else 20L) }
+    }
+    val sub = when (status) { "listening" -> " · LISTENING"; "processing" -> " · THINKING"; "responding" -> " · SPEAKING"; else -> "" }
+
+    Box(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawRect(Brush.radialGradient(
+                listOf(Red.copy(alpha = 0.10f + 0.10f * energy), Color.Transparent),
+                center = Offset(size.width / 2, size.height * 0.38f), radius = size.width * 0.95f))
+        }
+
+        Row(Modifier.fillMaxWidth().padding(horizontal = 26.dp, vertical = 28.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).graphicsLayer { alpha = 0.6f + 0.4f * sin(t * TAU * 6) }
+                .clip(CircleShape).background(Red))
+            Spacer(Modifier.width(18.dp))
+            Column(Modifier.weight(1f)) {
+                Text("U.L.T.R.O.N.", color = Color(0xFFE6E8F0), fontSize = 19.sp, letterSpacing = 7.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("AI ASSISTANT$sub", color = Dim, fontSize = 11.sp, letterSpacing = 3.sp)
+            }
+            Text("⚙", color = Dim, fontSize = 26.sp, modifier = Modifier.clickable { settings = true })
+        }
+
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.height(84.dp))
+
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val s = if (maxWidth < maxHeight) maxWidth else maxHeight
+                Box(Modifier.size(s * 0.96f), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val r = size.minDimension / 2; val c = center; val a = intro.value
+                        val rot = t * 360f
+                        fun arc(f: Float, start: Float, sweep: Float, col: Color, w: Float) =
+                            drawArc(col, start, sweep, false, Offset(c.x - r * f, c.y - r * f),
+                                Size(2 * r * f, 2 * r * f), style = Stroke(w, cap = StrokeCap.Round))
+                        drawCircle(Red.copy(alpha = 0.22f * a), r * 0.98f, style = Stroke(1.5f))
+                        drawCircle(Red.copy(alpha = 0.14f * a), r * 0.84f, style = Stroke(1.5f))
+                        for (i in 0 until 4) {
+                            val ang = (i * 90f + 45f) * (PI.toFloat() / 180f)
+                            drawLine(Red.copy(alpha = 0.6f * a),
+                                Offset(c.x + cos(ang) * r * 0.955f, c.y + sin(ang) * r * 0.955f),
+                                Offset(c.x + cos(ang) * r * 1.0f, c.y + sin(ang) * r * 1.0f), 3f)
+                        }
+                        arc(0.98f, rot, 75f, Red.copy(alpha = (0.45f + 0.5f * energy) * a), 4f)
+                        arc(0.98f, rot + 180f, 40f, Red.copy(alpha = 0.35f * a), 3f)
+                        arc(0.84f, -rot * 2, 50f, Red.copy(alpha = (0.35f + 0.4f * energy) * a), 3f)
+                        arc(0.91f, rot * 3, 24f, Red.copy(alpha = ((energy - 0.3f).coerceAtLeast(0f) * 1.4f) * a), 3f)
+                    }
+                    Box(
+                        Modifier.fillMaxWidth(0.62f).aspectRatio(HEAD_AR).graphicsLayer {
+                            val sc = (0.8f + 0.2f * intro.value) * (1f + 0.010f * sin(t * TAU * 3))
+                            scaleX = sc; scaleY = sc; alpha = intro.value
+                        }
+                    ) {
+                        Image(painterResource(R.drawable.ultron_head), null, Modifier.matchParentSize(), contentScale = ContentScale.Fit)
+                        Canvas(Modifier.matchParentSize()) {
+                            val b = ((intro.value - 0.5f) * 2f).coerceIn(0f, 1f)
+                            val fl = if (b < 1f && (b * 20).toInt() % 2 == 1) 0.3f else 1f
+                            val g = (0.30f + 0.70f * energy * (0.8f + 0.2f * sin(t * TAU * 6))) * b * fl
+                            for ((ex, ey) in listOf(ELX to ELY, ERX to ERY)) {
+                                val c = Offset(size.width * ex, size.height * ey); val rr = size.width * 0.17f
+                                drawCircle(
+                                    Brush.radialGradient(listOf(Red.copy(alpha = (0.65f * g).coerceIn(0f, 1f)), Color.Transparent), center = c, radius = rr),
+                                    rr, c, blendMode = BlendMode.Plus
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(
+                shown + if (shown.length < line.length) "▌" else "",
+                color = Dim, fontSize = 14.sp, letterSpacing = 3.sp, textAlign = TextAlign.Center, maxLines = 6,
+                modifier = Modifier.padding(horizontal = 32.dp).heightIn(min = 52.dp).animateContentSize()
+            )
+            Spacer(Modifier.height(10.dp))
+            Box(Modifier.width(36.dp).height(2.dp).background(Red))
+            Spacer(Modifier.height(10.dp))
+
+            AnimatedVisibility(
+                typing,
+                enter = fadeIn() + slideInVertically { it / 2 },
+                exit = fadeOut() + slideOutVertically { it / 2 }
+            ) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        input, { input = it }, Modifier.weight(1f), singleLine = true,
+                        placeholder = { Text("Type a command…") },
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Red, unfocusedBorderColor = Red.copy(alpha = 0.4f))
+                    )
+                    TextButton({ if (input.isNotBlank()) { run(input); input = ""; typing = false } }) { Text("SEND", color = Red) }
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth().padding(start = 34.dp, end = 34.dp, top = 6.dp, bottom = 26.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.clickable { mic() }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Canvas(Modifier.size(26.dp)) {
+                        val w = size.width; val h = size.height
+                        drawCircle(Dim, w * .28f, Offset(w / 2, h * .38f), style = Stroke(2.5f))
+                        drawLine(Dim, Offset(w / 2, h * .66f), Offset(w / 2, h * .92f), 2.5f)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("VOICE", color = Dim, fontSize = 11.sp, letterSpacing = 2.sp)
+                }
+
+                val src = remember { MutableInteractionSource() }
+                val pressed by src.collectIsPressedAsState()
+                val press by animateFloatAsState(if (pressed) 0.90f else 1f, spring(dampingRatio = 0.45f), label = "press")
+                Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.requiredSize(280.dp)) {
+                        drawCircle(Red.copy(alpha = 0.12f), 66.dp.toPx(), style = Stroke(1.5f))
+                        if (status == "listening") for (k in 0..1) {
+                            val f = ((t * 6f) + k * 0.5f) % 1f
+                            drawCircle(Red.copy(alpha = 0.45f * (1f - f)), 54.dp.toPx() + 70.dp.toPx() * f, style = Stroke(3f))
+                        }
+                    }
+                    Box(
+                        Modifier.size(112.dp).graphicsLayer { scaleX = press; scaleY = press }
+                            .drawBehind {
+                                val rc = size.minDimension / 2
+                                val g = 0.55f + 0.45f * energy * (0.8f + 0.2f * sin(t * TAU * 6))
+                                drawCircle(Color(0xFF12080B), rc - 12.dp.toPx())
+                                drawCircle(Red.copy(alpha = 0.22f * g), rc - 3.dp.toPx(), style = Stroke(14.dp.toPx()))
+                                drawCircle(Red.copy(alpha = 0.50f * g), rc - 5.dp.toPx(), style = Stroke(8.dp.toPx()))
+                                drawCircle(Red.copy(alpha = g), rc - 7.dp.toPx(), style = Stroke(3.dp.toPx()))
+                                drawCircle(Red.copy(alpha = 0.35f * g), rc - 18.dp.toPx(), style = Stroke(1.5f))
+                            }
+                            .clickable(interactionSource = src, indication = null) { mic() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(Modifier.size(30.dp)) {
+                            val w = size.width; val h = size.height; val c = Color(0xFFE0E0E8)
+                            drawRoundRect(c, Offset(w * .35f, 0f), Size(w * .3f, h * .6f), CornerRadius(w * .15f))
+                            drawArc(c, 0f, 180f, false, Offset(w * .2f, h * .2f), Size(w * .6f, h * .55f), style = Stroke(4f))
+                            drawLine(c, Offset(w * .5f, h * .75f), Offset(w * .5f, h * .95f), 4f)
+                        }
+                    }
+                }
+
+                Column(Modifier.clickable { typing = !typing }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Canvas(Modifier.size(26.dp)) {
+                        val w = size.width; val h = size.height
+                        drawRoundRect(Dim, Offset(w * .12f, h * .08f), Size(w * .76f, h * .84f), CornerRadius(w * .12f), style = Stroke(2.5f))
+                        for (i in 0..2) drawLine(Dim, Offset(w * .28f, h * (.32f + i * .18f)), Offset(w * .72f, h * (.32f + i * .18f)), 2.5f)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("TYPE", color = Dim, fontSize = 11.sp, letterSpacing = 2.sp)
+                }
+            }
+        }
+    }
+
+    if (settings) SettingsDialog(ctx) { settings = false }
+}
+
+private fun toast(ctx: Context, msg: String) {
+    Handler(Looper.getMainLooper()).post { Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show() }
+}
+
+@Composable
+fun SettingsDialog(ctx: Context, onClose: () -> Unit) {
+    var gem by remember { mutableStateOf(Cfg.get(ctx, "gemini")) }
+    var fish by remember { mutableStateOf(Cfg.get(ctx, "fish")) }
+    var voice by remember { mutableStateOf(Cfg.get(ctx, "voice")) }
+    var model by remember { mutableStateOf(Cfg.get(ctx, "model")) }
+    fun open(i: Intent) = ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    fun save() {
+        Cfg.set(ctx, "gemini", gem.trim()); Cfg.set(ctx, "fish", fish.trim())
+        Cfg.set(ctx, "voice", voice.trim()); Cfg.set(ctx, "model", model.trim())
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        containerColor = Color(0xFF111114),
+        title = { Text("ULTRON SETTINGS", color = Red, letterSpacing = 3.sp, fontSize = 16.sp) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                @Composable
+                fun f(v: String, ch: (String) -> Unit, lbl: String) =
+                    OutlinedTextField(v, ch, Modifier.fillMaxWidth().padding(vertical = 4.dp), singleLine = true, label = { Text(lbl) })
+                f(gem, { gem = it }, "Google API key (brain)")
+                f(model, { model = it }, "Model (leave blank)")
+                f(fish, { fish = it }, "Fish Audio API key (voice)")
+                f(voice, { voice = it }, "Voice model id")
+                Spacer(Modifier.height(8.dp))
+                TextButton({
+                    save(); toast(ctx, "Testing brain…")
+                    Thread { toast(ctx, Brain.ask(ctx, "Say hello in five words.")) }.start()
+                }) { Text("TEST BRAIN", color = Red) }
+                TextButton({
+                    save(); toast(ctx, "Testing voice…")
+                    Voice.speak(ctx, "I am Ultron. I am online.") { toast(ctx, Voice.lastError.ifBlank { "Voice played OK" }) }
+                }) { Text("TEST VOICE", color = Red) }
+                TextButton({ open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))) }) { Text("1. Allow overlay", color = Red) }
+                TextButton({ open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("2. Enable accessibility (control apps)", color = Red) }
+                TextButton({
+                    if (Settings.canDrawOverlays(ctx)) ctx.startForegroundService(Intent(ctx, OverlayService::class.java))
+                    else open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName)))
+                }) { Text("3. Start overlay", color = Red) }
+                TextButton({ ctx.stopService(Intent(ctx, OverlayService::class.java)) }) { Text("Stop overlay", color = Dim) }
+            }
+        },
+        confirmButton = { TextButton({ save(); onClose() }) { Text("SAVE", color = Red) } }
+    )
+}
+EOF
+
+cat > $J/BootReceiver.kt <<'EOF'
+package com.ultron.assistant
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(c: Context, i: Intent) {
+        if (i.action == Intent.ACTION_BOOT_COMPLETED && Settings.canDrawOverlays(c)) {
+            try { c.startForegroundService(Intent(c, OverlayService::class.java)) } catch (_: Exception) {}
+        }
+    }
+}
+EOF
+
+cat > $P/README.md <<'EOF'
+# Ultron Assistant
+Push to GitHub -> Actions -> "Build APK" -> download the `Ultron-APK` artifact.
+Keys are entered inside the app (Settings), never stored in the repo.
+EOF
+
+echo "Done. Project created in ./$P"
